@@ -3,7 +3,7 @@
 #include <assert.h>
 
 #ifdef HAS_FREE_RTOS
-
+ 
 namespace concurrency
 {
 
