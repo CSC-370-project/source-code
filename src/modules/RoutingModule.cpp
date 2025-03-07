@@ -53,7 +53,14 @@ void RoutingModule::sendAckNak(meshtastic_Routing_Error err, NodeNum to, PacketI
 {
     auto p = allocAckNak(err, to, idFrom, chIndex, hopLimit);
 
-    router->sendLocal(p); // we sometimes send directly to the local node
+    if(p){
+        // Allow multi-hop Ack forwarding by setting hopLimit to a configurable value
+        p->hop_limit = std::max(hopLimit, config.lora.hop_limit);
+        
+        LOG_INFO("Sending multi-hop ACK to Node: %d with hopLimit: %d", to, p->hop_limit);
+        router->sendLocal(p); // we sometimes send directly to the local node
+    }
+
 }
 
 uint8_t RoutingModule::getHopLimitForResponse(uint8_t hopStart, uint8_t hopLimit)

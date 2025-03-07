@@ -36,12 +36,19 @@ bool FloodingRouter::shouldFilterReceived(const meshtastic_MeshPacket *p)
 
         /* If the original transmitter is doing retransmissions (hopStart equals hopLimit) for a reliable transmission, e.g., when
         the ACK got lost, we will handle the packet again to make sure it gets an ACK to its packet. */
-        bool isRepeated = p->hop_start > 0 && p->hop_start == p->hop_limit;
+        bool isRepeated = p->hop_start > 0 && p->hop_start <= p->hop_limit;
         if (isRepeated) {
-            LOG_DEBUG("Repeated reliable tx");
-            if (!perhapsRebroadcast(p) && isToUs(p) && p->want_ack) {
-                // FIXME - channel index should be used, but the packet is still encrypted here
-                sendAckNak(meshtastic_Routing_Error_NONE, getFrom(p), p->id, 0, 0);
+            LOG_DEBUG("Repeated reliable tx - Multi-hop ACK processing");
+
+            if (!isToUs(p) && p->want_ack) {
+                LOG_INFO("Forwarding ACK for multi-hop delivery");
+                meshtastic_MeshPacket *ackPacket = packetPool.allocCopy(*p);
+                if (ackPacket) {
+                    ackPacket->hop_limit--;  // Decrease hop limit to prevent infinite loops
+                    perhapsRebroadcast(ackPacket);
+                }
+            } else if (isToUs(p)) {
+                sendAckNak(meshtastic_Routing_Error_NONE, getFrom(p), p->id, 0, p->hop_limit);
             }
         }
 
@@ -60,25 +67,18 @@ bool FloodingRouter::isRebroadcaster()
 bool FloodingRouter::perhapsRebroadcast(const meshtastic_MeshPacket *p)
 {
     if (!isToUs(p) && (p->hop_limit > 0) && !isFromUs(p)) {
-        if (p->id != 0) {
+        if (p->id != 0 || p->want_ack) {  // Allow rebroadcasting of ACKs
             if (isRebroadcaster()) {
                 meshtastic_MeshPacket *tosend = packetPool.allocCopy(*p); // keep a copy because we will be sending it
-
-                tosend->hop_limit--; // bump down the hop count
-#if USERPREFS_EVENT_MODE
-                if (tosend->hop_limit > 2) {
-                    // if we are "correcting" the hop_limit, "correct" the hop_start by the same amount to preserve hops away.
-                    tosend->hop_start -= (tosend->hop_limit - 2);
-                    tosend->hop_limit = 2;
+                if (tosend) {
+                    tosend->hop_limit--;  // Reduce hop limit to prevent looping
+                    LOG_INFO("Rebroadcast received floodmsg");
+                    // Note: we are careful to resend using the original senders node id
+                    // We are careful not to call our hooked version of send() - because we don't want to check this again
+                    Router::send(tosend);
+                    return true;
                 }
-#endif
 
-                LOG_INFO("Rebroadcast received floodmsg");
-                // Note: we are careful to resend using the original senders node id
-                // We are careful not to call our hooked version of send() - because we don't want to check this again
-                Router::send(tosend);
-
-                return true;
             } else {
                 LOG_DEBUG("No rebroadcast: Role = CLIENT_MUTE or Rebroadcast Mode = NONE");
             }
